@@ -10,10 +10,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/popochoo/go-messenger/internal/config"
 	"github.com/popochoo/go-messenger/internal/repository/postgres"
 	"github.com/popochoo/go-messenger/internal/repository/redis"
+	"github.com/popochoo/go-messenger/internal/service"
+	transport_http "github.com/popochoo/go-messenger/internal/transport/http"
 )
 
 func main() {
@@ -41,14 +42,13 @@ func main() {
 	defer rdb.Close()
 	slog.Info("connected to Redis")
 
-	router := gin.New()
-	router.Use(gin.Recovery())
+	userRepository := postgres.NewUserRepository(pgPool)
+	authService := service.NewAuthService(userRepository, cfg.JWTSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
+	authHandler := transport_http.NewAuthHandler(authService)
 
-	router.GET("/health", func(ctx *gin.Context) {
-		ctx.JSON(http.StatusOK, gin.H{
-			"status": "ok",
-			"time":   time.Now().UTC(),
-		})
+	router := transport_http.NewRouter(transport_http.Handlers{
+		Auth:        authHandler,
+		TokenParser: authService,
 	})
 
 	srv := &http.Server{
