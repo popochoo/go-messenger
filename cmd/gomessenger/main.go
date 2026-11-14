@@ -46,8 +46,13 @@ func main() {
 	authService := service.NewAuthService(userRepository, cfg.JWTSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
 	authHandler := transport_http.NewAuthHandler(authService)
 
+	chatRepository := postgres.NewChatRepository(pgPool)
+	chatService := service.NewChatService(chatRepository, userRepository)
+	chatHandler := transport_http.NewChatHandler(chatService)
+
 	router := transport_http.NewRouter(transport_http.Handlers{
 		Auth:        authHandler,
+		Chat:        chatHandler,
 		TokenParser: authService,
 	})
 
