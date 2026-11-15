@@ -15,6 +15,7 @@ import (
 	"github.com/popochoo/go-messenger/internal/repository/redis"
 	"github.com/popochoo/go-messenger/internal/service"
 	transport_http "github.com/popochoo/go-messenger/internal/transport/http"
+	"github.com/popochoo/go-messenger/internal/transport/ws"
 )
 
 func main() {
@@ -50,9 +51,24 @@ func main() {
 	chatService := service.NewChatService(chatRepository, userRepository)
 	chatHandler := transport_http.NewChatHandler(chatService)
 
+	eventBroker := redis.NewEventBroker(rdb)
+
+	messageRepository := postgres.NewMessageRepository(pgPool)
+	messageService := service.NewMessageService(messageRepository, chatRepository, eventBroker)
+	messageHandler := transport_http.NewMessageHandler(messageService)
+
+	wsHub := ws.NewHub(eventBroker)
+	wsCtx, wsCancel := context.WithCancel(context.Background())
+	defer wsCancel()
+	go wsHub.Run(wsCtx)
+
+	wsHandler := ws.NewHandler(wsHub, messageService, eventBroker, authService)
+
 	router := transport_http.NewRouter(transport_http.Handlers{
 		Auth:        authHandler,
 		Chat:        chatHandler,
+		Message:     messageHandler,
+		WS:          wsHandler,
 		TokenParser: authService,
 	})
 

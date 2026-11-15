@@ -5,11 +5,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/popochoo/go-messenger/internal/transport/ws"
 )
 
 type Handlers struct {
 	Auth        *AuthHandler
 	Chat        *ChatHandler
+	Message     *MessageHandler
+	WS          *ws.Handler
 	TokenParser TokenParser
 }
 
@@ -23,6 +26,8 @@ func NewRouter(h Handlers) *gin.Engine {
 			"time":   time.Now().UTC(),
 		})
 	})
+
+	router.GET("/ws", h.WS.ServerWS)
 
 	v1 := router.Group("/api/v1")
 	{
@@ -48,6 +53,9 @@ func NewRouter(h Handlers) *gin.Engine {
 				chats.POST("/group", h.Chat.CreateGroup)
 				chats.POST("/:chat_id/members", h.Chat.AddMember)
 				chats.DELETE("/:chat_id/members/:user_id", h.Chat.RemoveMember)
+
+				chats.GET("/:chat_id/messages", h.Message.GetHistory)
+				chats.GET("/:chat_id/messages/search", h.Message.Search)
 			}
 		}
 	}
