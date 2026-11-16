@@ -56,6 +56,10 @@ func NewRouter(h Handlers) *gin.Engine {
 
 				chats.GET("/:chat_id/messages", h.Message.GetHistory)
 				chats.GET("/:chat_id/messages/search", h.Message.Search)
+
+				chats.PATCH("/:chat_id/messages/:message_id", h.Message.EditMessage)
+				chats.DELETE("/:chat_id/messages/:message_id", h.Message.DeleteMessage)
+				chats.POST("/:chat_id/read", h.Message.MarkAsRead)
 			}
 		}
 	}
