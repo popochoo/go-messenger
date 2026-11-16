@@ -25,11 +25,8 @@ type MembersshipChecker interface {
 	GetChatAndMemberRole(ctx context.Context, chatID, userID int64) (domain.ChatType, domain.MemberRole, error)
 }
 
-type RateLimiter interface {
+type EventBroker interface {
 	CheckRateLimit(ctx context.Context, userID int64, maxMsgs int64, window time.Duration) (bool, error)
-}
-
-type EventPublisher interface {
 	PublishEvent(ctx context.Context, targetUserIDs []int64, payload []byte) error
 }
 
@@ -41,21 +38,18 @@ type wsEnvelope struct {
 type MessageService struct {
 	messageRepository MessageRepository
 	chatRepository    ChatRepository
-	rateLimiter       RateLimiter
-	publisher         EventPublisher
+	eventBroker       EventBroker
 }
 
 func NewMessageService(
 	messageRepository MessageRepository,
 	chatRepository ChatRepository,
-	rateLimiter RateLimiter,
-	publisher EventPublisher,
+	eventBroker EventBroker,
 ) *MessageService {
 	return &MessageService{
 		messageRepository: messageRepository,
 		chatRepository:    chatRepository,
-		rateLimiter:       rateLimiter,
-		publisher:         publisher,
+		eventBroker:       eventBroker,
 	}
 }
 
@@ -69,7 +63,7 @@ func (s *MessageService) SendMessage(ctx context.Context, senderID, chatID int64
 		return nil, nil, domain.ErrMessageTooLong
 	}
 
-	allowed, err := s.rateLimiter.CheckRateLimit(ctx, senderID, 5, 10*time.Second)
+	allowed, err := s.eventBroker.CheckRateLimit(ctx, senderID, 5, 10*time.Second)
 	if err == nil && !allowed {
 		return nil, nil, domain.ErrRateLimitExceeded
 	}
@@ -139,7 +133,7 @@ func (s MessageService) EditMessage(ctx context.Context, actorID, chatID, messag
 
 	if memberIDs, err := s.messageRepository.GetChatMemberIDs(ctx, chatID); err == nil {
 		if pkt, err := json.Marshal(wsEnvelope{Type: "message.updated", Payload: updatedMsg}); err == nil {
-			_ = s.publisher.PublishEvent(ctx, memberIDs, pkt)
+			_ = s.eventBroker.PublishEvent(ctx, memberIDs, pkt)
 		}
 	}
 
@@ -165,7 +159,7 @@ func (s *MessageService) DeleteMessage(ctx context.Context, actorID, chatID, mes
 
 	if memberIDs, err := s.messageRepository.GetChatMemberIDs(ctx, chatID); err == nil {
 		if pkt, err := json.Marshal(wsEnvelope{Type: "message.deleted", Payload: deletedMsg}); err == nil {
-			_ = s.publisher.PublishEvent(ctx, memberIDs, pkt)
+			_ = s.eventBroker.PublishEvent(ctx, memberIDs, pkt)
 		}
 	}
 
@@ -189,7 +183,7 @@ func (s *MessageService) MarkChatAsRead(ctx context.Context, userID, chatID, las
 			"last_read_message_id": lastReadMessageID,
 		}
 		if pkt, err := json.Marshal(wsEnvelope{Type: "chat.read", Payload: payload}); err != nil {
-			_ = s.publisher.PublishEvent(ctx, memberIDs, pkt)
+			_ = s.eventBroker.PublishEvent(ctx, memberIDs, pkt)
 		}
 	}
 
