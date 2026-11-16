@@ -1,0 +1,4 @@
+out/
+.git/
+.env
+*.exe

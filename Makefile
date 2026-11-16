@@ -4,7 +4,7 @@ export
 export PROJECT_ROOT=$(shell pwd -W 2>/dev/null || pwd)
 export MSYS_NO_PATHCONV=1
 
-.PHONY: help env-up env-down env-cleanup migrate-up migrate-down migrate-action migrate-create gomessenger-run ps
+.PHONY: help env-up env-down env-cleanup migrate-up migrate-down migrate-action migrate-create gomessenger-run app-up app-down ps
 
 help: ## Показать список доступных команд
 	@grep -h -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -55,6 +55,13 @@ migrate-create: ## Создать файлы миграции (Пример: mak
 gomessenger-run: ## Запустить сервер мессенджера
 	go mod tidy && \
 	go run ${PROJECT_ROOT}/cmd/gomessenger/main.go
+
+app-up: ## Собрать и запустить весь проект в Docker (БД + Redis + Миграции + Go App)
+	@docker compose up -d --build gomessenger-postgres gomessenger-redis gomessenger-postgres-port-forwarder gomessenger-redis-port-forwarder gomessenger-app
+	@"$(MAKE)" migrate-up
+
+app-down: ## Остановить все контейнеры проекта
+	@docker compose down
 
 ps: ## Показать статус контейнеров
 	@docker compose ps
