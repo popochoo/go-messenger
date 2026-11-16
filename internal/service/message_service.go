@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,10 @@ type MessageRepository interface {
 	GetChatMemberIDs(ctx context.Context, chatID int64) ([]int64, error)
 	GetHistory(ctx context.Context, chatID, cursor int64, limit int) (*domain.MessagesPage, error)
 	Search(ctx context.Context, chatID int64, searchQuery string, limit int) ([]domain.Message, error)
+	GetByID(ctx context.Context, messageID int64) (*domain.Message, error)
+	UpdateContent(ctx context.Context, messageID int64, newContent string) (*domain.Message, error)
+	SoftDelete(ctx context.Context, messageID int64) (*domain.Message, error)
+	MarkAsRead(ctx context.Context, chatID, userID, messageID int64) (int64, error)
 }
 
 type MembersshipChecker interface {
@@ -24,21 +29,33 @@ type RateLimiter interface {
 	CheckRateLimit(ctx context.Context, userID int64, maxMsgs int64, window time.Duration) (bool, error)
 }
 
+type EventPublisher interface {
+	PublishEvent(ctx context.Context, targetUserIDs []int64, payload []byte) error
+}
+
+type wsEnvelope struct {
+	Type    string `json:"type"`
+	Payload any    `json:"payload"`
+}
+
 type MessageService struct {
 	messageRepository MessageRepository
 	chatRepository    ChatRepository
 	rateLimiter       RateLimiter
+	publisher         EventPublisher
 }
 
 func NewMessageService(
 	messageRepository MessageRepository,
 	chatRepository ChatRepository,
 	rateLimiter RateLimiter,
+	publisher EventPublisher,
 ) *MessageService {
 	return &MessageService{
 		messageRepository: messageRepository,
 		chatRepository:    chatRepository,
 		rateLimiter:       rateLimiter,
+		publisher:         publisher,
 	}
 }
 
@@ -93,4 +110,88 @@ func (s *MessageService) SearchMessages(ctx context.Context, userID, chatID int6
 	}
 
 	return s.messageRepository.Search(ctx, chatID, query, 30)
+}
+
+func (s MessageService) EditMessage(ctx context.Context, actorID, chatID, messageID int64, newContent string) (*domain.Message, error) {
+	newContent = strings.TrimSpace(newContent)
+	if newContent == "" {
+		return nil, domain.ErrEmptyMessage
+	}
+	if len([]rune(newContent)) > 4000 {
+		return nil, domain.ErrMessageTooLong
+	}
+
+	msg, err := s.messageRepository.GetByID(ctx, messageID)
+	if err != nil {
+		return nil, err
+	}
+	if msg.ChatID != chatID || msg.IsDeleted {
+		return nil, domain.ErrMessageNotFound
+	}
+	if msg.SenderID != actorID {
+		return nil, domain.ErrNotMessageAuthor
+	}
+
+	updatedMsg, err := s.messageRepository.UpdateContent(ctx, messageID, newContent)
+	if err != nil {
+		return nil, err
+	}
+
+	if memberIDs, err := s.messageRepository.GetChatMemberIDs(ctx, chatID); err == nil {
+		if pkt, err := json.Marshal(wsEnvelope{Type: "message.updated", Payload: updatedMsg}); err == nil {
+			_ = s.publisher.PublishEvent(ctx, memberIDs, pkt)
+		}
+	}
+
+	return updatedMsg, nil
+}
+
+func (s *MessageService) DeleteMessage(ctx context.Context, actorID, chatID, messageID int64) (*domain.Message, error) {
+	msg, err := s.messageRepository.GetByID(ctx, messageID)
+	if err != nil {
+		return nil, err
+	}
+	if msg.ChatID != chatID || msg.IsDeleted {
+		return nil, domain.ErrMessageNotFound
+	}
+	if msg.SenderID != actorID {
+		return nil, domain.ErrNotMessageAuthor
+	}
+
+	deletedMsg, err := s.messageRepository.SoftDelete(ctx, messageID)
+	if err != nil {
+		return nil, err
+	}
+
+	if memberIDs, err := s.messageRepository.GetChatMemberIDs(ctx, chatID); err == nil {
+		if pkt, err := json.Marshal(wsEnvelope{Type: "message.deleted", Payload: deletedMsg}); err == nil {
+			_ = s.publisher.PublishEvent(ctx, memberIDs, pkt)
+		}
+	}
+
+	return deletedMsg, nil
+}
+
+func (s *MessageService) MarkChatAsRead(ctx context.Context, userID, chatID, lastReadMessageID int64) (int64, error) {
+	if _, _, err := s.chatRepository.GetChatAndMemberRole(ctx, chatID, userID); err != nil {
+		return 0, err
+	}
+
+	updatedID, err := s.messageRepository.MarkAsRead(ctx, chatID, userID, lastReadMessageID)
+	if err != nil {
+		return 0, err
+	}
+
+	if memberIDs, err := s.messageRepository.GetChatMemberIDs(ctx, chatID); err == nil {
+		payload := map[string]any{
+			"chat_id":              chatID,
+			"user_id":              userID,
+			"last_read_message_id": lastReadMessageID,
+		}
+		if pkt, err := json.Marshal(wsEnvelope{Type: "chat.read", Payload: payload}); err != nil {
+			_ = s.publisher.PublishEvent(ctx, memberIDs, pkt)
+		}
+	}
+
+	return updatedID, nil
 }

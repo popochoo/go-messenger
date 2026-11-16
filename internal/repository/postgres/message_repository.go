@@ -2,8 +2,10 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/popochoo/go-messenger/internal/domain"
 )
@@ -174,4 +176,106 @@ func (r *MessageRepository) Search(ctx context.Context, chatID int64, searchQuer
 	}
 
 	return messages, rows.Err()
+}
+
+func (r *MessageRepository) GetByID(ctx context.Context, messageID int64) (*domain.Message, error) {
+	query := `
+		SELECT id, chat_id, sender_id, content, reply_to_id, is_edited, is_deleted, created_at
+		FROM messages
+		WHERE id = $1;
+	`
+	var message domain.Message
+	err := r.pool.QueryRow(ctx, query, messageID).Scan(
+		&message.ID,
+		&message.ChatID,
+		&message.SenderID,
+		&message.Content,
+		&message.ReplyToID,
+		&message.IsEdited,
+		&message.IsDeleted,
+		&message.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrMessageNotFound
+		}
+
+		return nil, fmt.Errorf("get message by id: %w", err)
+	}
+
+	return &message, nil
+}
+
+func (r *MessageRepository) UpdateContent(ctx context.Context, messageID int64, newContent string) (*domain.Message, error) {
+	query := `
+		UPDATE messages
+		SET content = $1, is_edited = TRUE, updated_at = NOW()
+		WHERE id = $2 AND is_deleted = FALSE
+		RETURNING id, chat_id, sender_id, content, reply_to_id, is_edited, is_deleted, created_at;
+	`
+	var message domain.Message
+	err := r.pool.QueryRow(ctx, query, newContent, messageID).Scan(
+		&message.ID,
+		&message.ChatID,
+		&message.SenderID,
+		&message.Content,
+		&message.ReplyToID,
+		&message.IsEdited,
+		&message.IsDeleted,
+		&message.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrMessageNotFound
+		}
+
+		return nil, fmt.Errorf("update message: %w", err)
+	}
+
+	return &message, nil
+}
+
+func (r *MessageRepository) SoftDelete(ctx context.Context, messageID int64) (*domain.Message, error) {
+	query := `
+		UPDATE messages
+		SET content = '', is_deleted = TRUE, updated_at = NOW()
+		WHERE id = $1 AND is_deleted = FALSE
+		RETURNING id, chat_id, sender_id, content, reply_to_id, is_edited, is_deleted, created_at;
+	`
+	var message domain.Message
+	err := r.pool.QueryRow(ctx, query, messageID).Scan(
+		&message.ID,
+		&message.ChatID,
+		&message.SenderID,
+		&message.Content,
+		&message.ReplyToID,
+		&message.IsEdited,
+		&message.IsDeleted,
+		&message.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrMessageNotFound
+		}
+
+		return nil, fmt.Errorf("soft delete message: %w", err)
+	}
+
+	return &message, nil
+}
+
+func (r *MessageRepository) MarkAsRead(ctx context.Context, chatID, userID, messageID int64) (int64, error) {
+	query := `
+		UPDATE chat_members
+		SET last_read_message_id = GREATEST(last_read_message_id, $3)
+		WHERE chat_id = $1 AND user_id = $2
+		RETURNING last_read_message_id;
+	`
+	var updatedID int64
+	err := r.pool.QueryRow(ctx, query, chatID, userID, messageID).Scan(&updatedID)
+	if err != nil {
+		return 0, fmt.Errorf("mark chat as read: %w", err)
+	}
+
+	return updatedID, nil
 }
