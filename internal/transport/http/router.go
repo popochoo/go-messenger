@@ -20,6 +20,8 @@ func NewRouter(h Handlers) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
 
+	router.StaticFile("/", "./web/index.html")
+
 	router.GET("/health", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{
 			"status": "ok",
